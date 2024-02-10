@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -64,7 +65,8 @@ namespace Docker.DotNet
             throw new NotSupportedException("_stream isn't a peekable stream");
         }
 
-        public async Task<ReadResult> ReadOutputAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        public async Task<ReadResult> ReadOutputAsync(byte[] buffer, int offset, int count,
+            CancellationToken cancellationToken)
         {
             if (!_multiplexed)
             {
@@ -79,7 +81,8 @@ namespace Docker.DotNet
             {
                 for (var i = 0; i < _header.Length;)
                 {
-                    var n = await _stream.ReadAsync(_header, i, _header.Length - i, cancellationToken).ConfigureAwait(false);
+                    var n = await _stream.ReadAsync(_header, i, _header.Length - i, cancellationToken)
+                        .ConfigureAwait(false);
                     if (n == 0)
                     {
                         if (i == 0)
@@ -107,9 +110,9 @@ namespace Docker.DotNet
                 }
 
                 _remaining = (_header[4] << 24) |
-                            (_header[5] << 16) |
-                            (_header[6] << 8) |
-                            _header[7];
+                             (_header[5] << 16) |
+                             (_header[6] << 8) |
+                             _header[7];
             }
 
             var toRead = Math.Min(count, _remaining);
@@ -157,7 +160,8 @@ namespace Docker.DotNet
             {
                 for (;;)
                 {
-                    var count = await input.ReadAsync(buffer, 0, buffer.Length, cancellationToken).ConfigureAwait(false);
+                    var count = await input.ReadAsync(buffer, 0, buffer.Length, cancellationToken)
+                        .ConfigureAwait(false);
                     if (count == 0)
                     {
                         break;
@@ -174,7 +178,8 @@ namespace Docker.DotNet
             }
         }
 
-        public async Task CopyOutputToAsync(Stream stdin, Stream stdout, Stream stderr, CancellationToken cancellationToken)
+        public async Task CopyOutputToAsync(Stream stdin, Stream stdout, Stream stderr,
+            CancellationToken cancellationToken)
         {
 #if !NET45
             var buffer = ArrayPool<byte>.Shared.Rent(BufferSize);
@@ -186,7 +191,8 @@ namespace Docker.DotNet
             {
                 for (;;)
                 {
-                    var result = await ReadOutputAsync(buffer, 0, buffer.Length, cancellationToken).ConfigureAwait(false);
+                    var result = await ReadOutputAsync(buffer, 0, buffer.Length, cancellationToken)
+                        .ConfigureAwait(false);
                     if (result.EOF)
                     {
                         return;
@@ -217,6 +223,96 @@ namespace Docker.DotNet
                 ArrayPool<byte>.Shared.Return(buffer);
 #endif
             }
+        }
+
+        public async Task<(string stdout, string stderr)> ReadOutputWhileDataAvailable(
+            CancellationToken cancellationToken)
+        {
+            using (MemoryStream outMem = new MemoryStream(), outErr = new MemoryStream())
+            {
+                await CopyOutputToAsyncWhileDataAvailable(Stream.Null, outMem, outErr, cancellationToken);
+
+                outMem.Seek(0, SeekOrigin.Begin);
+                outErr.Seek(0, SeekOrigin.Begin);
+
+                using (StreamReader outRdr = new StreamReader(outMem), errRdr = new StreamReader(outErr))
+                {
+                    var stdout = await outRdr.ReadToEndAsync();
+                    var stderr = await errRdr.ReadToEndAsync();
+                    return (stdout, stderr);
+                }
+            }
+        }
+
+        private async Task CopyOutputToAsyncWhileDataAvailable(
+            Stream stdin,
+            Stream stdout,
+            Stream stderr,
+            CancellationToken cancellationToken)
+        {
+            var buffer = ArrayPool<byte>.Shared.Rent(BufferSize);
+
+            try
+            {
+                for (;;)
+                {
+                    try
+                    {
+                        if (!DoesStreamHaveData()) return;
+
+                        var result = await ReadOutputAsync(buffer, 0, buffer.Length, cancellationToken)
+                            .ConfigureAwait(false);
+
+                        if (result.EOF)
+                        {
+                            return;
+                        }
+
+                        Stream stream;
+                        switch (result.Target)
+                        {
+                            case TargetStream.StandardIn:
+                                stream = stdin;
+                                break;
+                            case TargetStream.StandardOut:
+                                stream = stdout;
+                                break;
+                            case TargetStream.StandardError:
+                                stream = stderr;
+                                break;
+                            default:
+                                throw new InvalidOperationException($"Unknown TargetStream: '{result.Target}'.");
+                        }
+
+                        await stream.WriteAsync(buffer, 0, result.Count, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return;
+                    }
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+        }
+
+        private bool DoesStreamHaveData()
+        {
+            if (_stream is BufferedReadStream)
+            {
+                var bufferedReadStream = (BufferedReadStream)_stream;
+
+                if (bufferedReadStream.Inner is NetworkStream)
+                {
+                    var networkStream = (NetworkStream)bufferedReadStream.Inner;
+
+                    if (networkStream.DataAvailable) return false;
+                }
+            }
+
+            return true;
         }
 
         public void Dispose()

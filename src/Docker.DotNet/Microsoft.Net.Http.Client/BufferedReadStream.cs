@@ -19,6 +19,9 @@ namespace Microsoft.Net.Http.Client
 
         private readonly Stream _inner;
         private readonly Socket _socket;
+
+        public Stream Inner => _inner;
+
         private readonly byte[] _buffer;
         private volatile int _bufferRefCount;
         private int _bufferOffset = 0;
@@ -27,7 +30,8 @@ namespace Microsoft.Net.Http.Client
 
         public BufferedReadStream(Stream inner, Socket socket)
             : this(inner, socket, 1024)
-        { }
+        {
+        }
 
         public BufferedReadStream(Stream inner, Socket socket, int bufferLength)
         {
@@ -35,6 +39,7 @@ namespace Microsoft.Net.Http.Client
             {
                 throw new ArgumentNullException(nameof(inner));
             }
+
             _inner = inner;
             _socket = socket;
 #if !NET45
@@ -182,7 +187,7 @@ namespace Microsoft.Net.Http.Client
             {
                 int toCopy = Math.Min(_bufferCount, (int)toPeek);
                 Buffer.BlockCopy(_buffer, _bufferOffset, buffer, 0, toCopy);
-                peeked = (uint) toCopy;
+                peeked = (uint)toCopy;
                 available = (uint)_bufferCount;
                 remaining = available - peeked;
                 return toCopy;
@@ -205,7 +210,8 @@ namespace Microsoft.Net.Http.Client
                 {
                     if (validBuffer)
                     {
-                        _bufferCount = await _inner.ReadAsync(_buffer, _bufferOffset, _buffer.Length, cancel).ConfigureAwait(false);
+                        _bufferCount = await _inner.ReadAsync(_buffer, _bufferOffset, _buffer.Length, cancel)
+                            .ConfigureAwait(false);
                     }
                 }
                 finally
@@ -216,7 +222,8 @@ namespace Microsoft.Net.Http.Client
                     }
                 }
 #else
-                _bufferCount = await _inner.ReadAsync(_buffer, _bufferOffset, _buffer.Length, cancel).ConfigureAwait(false);
+                _bufferCount =
+ await _inner.ReadAsync(_buffer, _bufferOffset, _buffer.Length, cancel).ConfigureAwait(false);
 #endif
                 if (_bufferCount == 0)
                 {
@@ -257,8 +264,7 @@ namespace Microsoft.Net.Http.Client
                         foundCR = false;
                     }
                 }
-            }
-            while (!foundCRLF);
+            } while (!foundCRLF);
 
             return builder.ToString(0, builder.Length - 2); // Drop the CRLF
         }
